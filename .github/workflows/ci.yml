@@ -1,53 +1,70 @@
-name: Manifest CI
+name: CI
 
 on:
-  push:
-    paths:
-      - "manifests/**"
-      - ".github/workflows/ci.yml"
   pull_request:
-    paths:
-      - "manifests/**"
-      - ".github/workflows/ci.yml"
+  push:
+    branches:
+      - main
 
 jobs:
-  validate-manifests:
+  detect-changes:
     runs-on: ubuntu-latest
-
+    outputs:
+      manifests_changed: ${{ steps.filter.outputs.manifests }}
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check for merge conflict markers
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            manifests:
+              - 'manifests/**'
+
+  basic-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Basic repository check
+        run: |
+          echo "CI triggered successfully."
+          test -f README.md || echo "README.md not found, but continuing."
+
+  validate-manifests:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.manifests_changed == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check merge conflict markers
         run: |
           if grep -R -nE '^(<<<<<<<|=======|>>>>>>>)' manifests; then
             echo "Unresolved merge conflict markers found."
             exit 1
           fi
 
-      - name: Validate YAML syntax
+      - name: Validate YAML and image tag
         run: |
           python3 - <<'PY'
-          import yaml
           from pathlib import Path
+          import yaml
 
           path = Path("manifests/deployment.yaml")
           docs = list(yaml.safe_load_all(path.read_text()))
-          assert len(docs) == 2, "deployment.yaml must contain Deployment and Service"
-          assert docs[0]["kind"] == "Deployment", "first document must be a Deployment"
-          assert docs[1]["kind"] == "Service", "second document must be a Service"
-          PY
 
-      - name: Validate allowed image tags
-        run: |
-          IMAGE_LINE=$(grep 'image:' manifests/deployment.yaml | head -1 | xargs)
-          echo "Found image line: $IMAGE_LINE"
-          case "$IMAGE_LINE" in
-            "image: wil42/playground:v1"|"image: wil42/playground:v2")
-              echo "Image tag is valid."
-              ;;
-            *)
-              echo "Only wil42/playground:v1 or wil42/playground:v2 are allowed."
-              exit 1
-              ;;
-          esac
+          assert len(docs) == 2, "deployment.yaml must contain Deployment and Service"
+          assert docs[0]["kind"] == "Deployment", "first document must be Deployment"
+          assert docs[1]["kind"] == "Service", "second document must be Service"
+
+          image = docs[0]["spec"]["template"]["spec"]["containers"][0]["image"]
+          assert image in {
+              "wil42/playground:v1",
+              "wil42/playground:v2",
+          }, "Only v1 and v2 are allowed"
+          PY

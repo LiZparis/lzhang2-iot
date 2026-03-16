@@ -13,22 +13,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
       - name: Validate deployment manifest
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import sys
           import yaml
 
           path = Path("manifests/deployment.yaml")
           if not path.exists():
-              raise SystemExit("manifests/deployment.yaml not found")
+              sys.exit("manifests/deployment.yaml not found")
 
-          docs = list(yaml.safe_load_all(path.read_text()))
-          image = docs[0]["spec"]["template"]["spec"]["containers"][0]["image"]
+          try:
+              docs = list(yaml.safe_load_all(path.read_text()))
+          except Exception as e:
+              sys.exit(f"Invalid YAML: {e}")
 
-          if image not in {
+          if len(docs) < 2:
+              sys.exit("deployment.yaml must contain at least 2 YAML documents")
+
+          if docs[0].get("kind") != "Deployment":
+              sys.exit("First document must be a Deployment")
+
+          if docs[1].get("kind") != "Service":
+              sys.exit("Second document must be a Service")
+
+          try:
+              image = docs[0]["spec"]["template"]["spec"]["containers"][0]["image"]
+          except Exception:
+              sys.exit("Cannot read container image from Deployment")
+
+          allowed = {
               "wil42/playground:v1",
               "wil42/playground:v2",
-          }:
-              raise SystemExit("Only v1 and v2 are allowed")
+          }
+
+          if image not in allowed:
+              sys.exit(f"Only these images are allowed: {sorted(allowed)}")
+
+          print("Manifest validation passed.")
           PY
